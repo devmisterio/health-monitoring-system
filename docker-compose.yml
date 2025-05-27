@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: air_db
+      POSTGRES_USER: air_user
+      POSTGRES_PASSWORD: air_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U air_user -d air_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  air-server:
+    build: ./air-server
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: air_user
+      DB_PASSWORD: air_password
+      DB_DATABASE: air_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      THROTTLER_TTL: 60000
+      THROTTLER_LIMIT: 60
+      BATCH_THRESHOLD: 50
+      BATCH_TIME_THRESHOLD: 5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - responder_network
+
+  air-server-ui:
+    build:
+      context: ./air-server-ui
+      args:
+        VITE_API_BASE: http://localhost:3000
+    ports:
+      - "8080:80"
+    depends_on:
+      - air-server
+    networks:
+      - default
+
+  responder:
+    build: ./responder-service
+    environment:
+      AIR_SERVER_URL: http://air-server:3000/api
+      HEALTH_INTERVAL: 45
+      LOG_LEVEL: info
+    depends_on:
+      - air-server
+    networks:
+      - responder_network
+    deploy:
+      replicas: 15
+
+networks:
+  default:
+    driver: bridge
+  responder_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+volumes:
+  postgres_data:
